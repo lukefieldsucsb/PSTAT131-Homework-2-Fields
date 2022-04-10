@@ -1,0 +1,131 @@
+
+---
+title: "PSTAT 131 Homework 2"
+author: "Luke Fields (8385924)"
+date: "`r format(Sys.Date(), 'April 6, 2022')`"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+  
+  
+```{r setup, echo=FALSE}
+library(corrplot)
+library(knitr)
+library(MASS)
+library(tidyverse)
+library(tidymodels)
+library(ggplot2)
+library("dplyr")
+library("yardstick")
+abalone <- read_csv("abalone.csv")
+# set global chunk options: images will be 7x5 inches
+knitr::opts_chunk$set(
+	echo = TRUE,
+	fig.height = 5,
+	fig.width = 7,
+	tidy = TRUE,
+	tidy.opts = list(width.cutoff = 60)
+)
+opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE)
+options(digits = 4)
+
+
+
+## indents are for indenting r code as formatted text
+## They may need to be adjusted depending on your OS
+# if your output looks odd, increase or decrease indent
+indent1 = '    '
+indent2 = '        '
+indent3 = '            '
+```
+
+### Question 1: Your goal is to predict abalone age, which is calculated as the number of rings plus 1.5. Notice there currently is no age variable in the data set. Add age to the data set. Assess and describe the distribution of age.
+
+```{r}
+abalone$age <- (abalone$rings + 1.5)
+summary(abalone$age)
+abalone %>% 
+  ggplot(aes(x = age)) +
+  geom_histogram(bins = 25) +
+  theme_bw()
+```
+The distribution of age is a positively skewed distribution, with a mean of 11.4, and median 10.5. THe youngest abalone is about 2.5 years old, and the oldest abalone is about 30.5 years old. Most abalones are somewhere between 7 and 15 years old, on average. 
+
+### Question 2: Split the abalone data into a training set and a testing set. Use stratified sampling.
+
+```{r}
+set.seed(912)
+abalone_split <- initial_split(abalone, 
+                               prop = 0.7, strata = age)
+abalone_train <- training(abalone_split)
+abalone_test <- testing(abalone_split)
+abalone_train
+```
+We have 2,922 rows in our training dataset, which is about 75% of our entire abalone dataset's 4,177 rows. We want to predict age, so we will use that as our strata. 
+
+###  Question 3: Using the training data, create a recipe predicting the outcome variable, age, with all other predictor variables. Explain why you shouldn’t use rings to predict age.
+
+```{r}
+abalone_recipe <- 
+  recipe(age ~ type + longest_shell + diameter + height + 
+           whole_weight + shucked_weight + viscera_weight + 
+           shell_weight, data = abalone_train) %>%
+  step_dummy(type, levels = 3) %>%
+  step_normalize() %>%
+  step_center() %>%
+  step_interact(terms = ~longest_shell:diameter) %>% 
+  step_interact(terms = ~shucked_weight:shell_weight) %>%
+  step_interact(terms = ~type_M:shucked_weight) %>%
+  step_interact(terms = ~type_F:shucked_weight) %>%
+  step_interact(terms = ~type_I:shucked_weight)
+
+abalone_recipe
+```
+We should not use rings to predict age because if we have rings, then we automatically will know what age will be as it will be the amount of rings + 1.5. The whole purpose of this experiment and model is to see if there is a way to predict abalone age in a way that does not require cutting open the abalone and using microscopic technology, and instead using easier to obtain information. additionally, for our dummy variable (type / gender), female will be our "base" case. 
+
+### Question 4: Create and store a linear regression object using the "lm" engine.
+
+```{r}
+lm_object <- linear_reg() %>% 
+  set_engine("lm")
+```
+Here we set our engine to "lm" so that we have a linear regression object ready to be used for further questions. 
+
+### Question 5 Now: set up an empty workflow, add the model you created in Question 4, and add the recipe that you created in Question 3.
+
+```{r}
+abalone_wflow <- workflow() %>% 
+  add_model(lm_object) %>% 
+  add_recipe(abalone_recipe)
+```
+Here we set up our workflow for our abalone model, using the object and recipe from questions 3 and 4, which allows us to fit our model further. 
+
+### Question 6: Use your fit() object to predict the age of a hypothetical female abalone with longest_shell = 0.50, diameter = 0.10, height = 0.30, whole_weight = 4, shucked_weight = 1, viscera_weight = 2, shell_weight = 1.
+
+```{r}
+abalone_fit <- fit(abalone_wflow, abalone_train)
+abalone_pred <- abalone_fit %>%
+  extract_fit_parsnip() %>%
+  tidy()
+hypo_f_attrib <- data.frame(longest_shell = 0.5, diameter = 0.1, height = 0.3,
+                       whole_weight = 4, shucked_weight = 1, 
+                       viscera_weight = 2, shell_weight = 1, type = "F")
+hypo_age <- predict(abalone_fit, new_data = hypo_f_attrib)
+abalone_pred
+hypo_age
+```
+The predicted age for this hypothetical female (let's call her Shelly) will be 18.54. Interpreting this, because Shelly is a female with a longest shell length of 0.5 mm, a diameter of 0.1 mm, a height of 0.3 mm, weighs 4 total g, with a meat weight of 1 g, gut weight of 2 g, and shell weight of 1g, she is expected to have an age of 18.54 years old. 
+
+### Question 7: Now you want to assess your model’s performance. To do this, use the yardstick package: Create a metric set that includes R2, RMSE (root mean squared error), and MAE (mean absolute error). Use predict() and bind_cols() to create a tibble of your model’s predicted values from the training data along with the actual observed ages (these are needed to assess your model’s performance). Finally, apply your metric set to the tibble, report the results, and interpret the R2 value.
+
+```{r}
+abalone_train_resid <- predict(abalone_fit, new_data = abalone_train %>% select(-age))
+abalone_train_resid <- bind_cols(abalone_train_resid, 
+                               abalone_train %>% select(age))
+abalone_metrics <- metric_set(rmse, rsq, mae)
+abalone_metrics(abalone_train_resid, truth = age, 
+                estimate = .pred)
+```
+This R2 value means that about 55.37% of the variability in age can be explained using the predictor variables in our model, which is not that strong. An rmse of 2.145, and a mean square error of 1.546 show that our abalone. model did not perform the greatest. 
